@@ -1,0 +1,121 @@
+syntax = "proto3";
+package proto;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.marshaler_all) = true;
+option (gogoproto.sizer_all) = true;
+option (gogoproto.unmarshaler_all) = true;
+option (gogoproto.goproto_getters_all) = false;
+option (gogoproto.goproto_enum_prefix_all) = false;
+
+enum EntryType {
+	Log       = 0;
+	Configure = 1;
+}
+
+// A viewstamp is a pair <view-number, op-number>, with the natural
+// order: the view-number is considered first, and then the op-number
+// for two viewstamps with the same view-number.
+message ViewStamp {
+	// The current view-number, initially 0.
+	uint64 view_num = 1;
+	// The op-number assigned to the most recently received
+	// request, initially 0.
+	uint64 op_num   = 2;
+}
+
+message Entry {
+	EntryType type       = 1;
+   	ViewStamp view_stamp = 2 [(gogoproto.nullable) = false];
+	bytes     data       = 3;
+}
+
+enum MessageType {
+	// client server
+	Request                  = 0;
+	Reply                    = 1;
+
+	// normal
+	Prepare                  = 2;
+	PrepareOk                = 3;
+	Commit                   = 4;
+	CommitOk                 = 5;
+
+ 	// view change
+	Change                   = 6;
+	StartViewChange          = 7;
+	DoViewChange             = 9;
+	StartView                = 10;
+
+	// recovering
+	Recovery                 = 11;
+	RecoveryResponse         = 12;
+
+	// state transfer
+	NewState                 = 13;
+	GetState                 = 14;
+
+	// Reconfiguration
+	Reconfiguration          = 15;
+	StartEpoch               = 16;
+	EpochStarted             = 17;
+	CheckEpoch               = 18;
+	NewEpoch                 = 19;
+
+	Heartbeat                = 20;
+	PrepareAppliedState      = 21;
+}
+
+message Message {
+	MessageType    type          = 1;
+	uint64         from          = 2;
+	uint64         to            = 3;
+	uint64         log_num       = 4;
+   	ViewStamp      view_stamp    = 5 [(gogoproto.nullable) = false];
+	uint64         commit_num    = 6;
+	repeated Entry entries       = 7 [(gogoproto.nullable) = false];
+	uint64         x             = 8;
+	bytes          context       = 9;
+	uint64         note          = 10;
+	AppliedState   applied_state = 11 [(gogoproto.nullable) = false];
+}
+
+message HardState {
+   	ViewStamp view_stamp = 1 [(gogoproto.nullable) = false];
+	// The commit-number is the op-number of the most recently
+	// commitNum operation.
+	uint64 commit_num    = 2;
+}
+
+message AppliedState {
+    Applied applied = 1 [(gogoproto.nullable) = false];
+   	bytes data      = 2;
+}
+
+message Applied {
+   	ViewStamp view_stamp                   = 1 [(gogoproto.nullable) = false];
+	ConfigurationState configuration_state = 2 [(gogoproto.nullable) = false];
+}
+
+message ConfigurationState {
+	uint64 epoch_num                   = 1;
+    // New replicas use the old-configuration for state transfer at the
+	// start of an epoch; this way new nodes know where to get the state.
+	repeated uint64 old_configuration  = 2;
+	// The configuration. This is a sorted array containing
+	// the IP addresses of each of the 2f + 1 replicas.
+	repeated uint64 configuration      = 3;
+}
+
+enum ConfigurationType {
+	AddReplica = 0;
+	DelReplica = 1;
+}
+
+message Configuration {
+	ConfigurationType  type              = 1;
+	uint64             epoch_num         = 2;
+	uint64             new_configuration = 3;
+	bytes              context           = 4;
+}
