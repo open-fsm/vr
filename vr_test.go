@@ -36,40 +36,6 @@ func requestMessageEmptyEntries(from, to uint64) proto.Message {
 	return proto.Message{From: from, To: to, Type: proto.Request, Entries: []proto.Entry{{}}}
 }
 
-var (
-	v0o1,v1o1,v1o2,v1o3,v1o4,v1o5,v1o6,v1o7,v2o0,v2o2,v2o4,v2o5,v2o6,v2o7,v2o8,v3o2,v2o1,v2o3,v3o3,
-	v3o4,v4o3,v4o4,v4o5,v4o6,v4o1,v4o2 proto.ViewStamp
-)
-
-func initViewStampCase()  {
-	v0o1 = proto.ViewStamp{ViewNum: 0, OpNum: 1}
-	v1o1 = proto.ViewStamp{ViewNum: 1, OpNum: 1}
-	v1o2 = proto.ViewStamp{ViewNum: 1, OpNum: 2}
-	v1o3 = proto.ViewStamp{ViewNum: 1, OpNum: 3}
-	v1o4 = proto.ViewStamp{ViewNum: 1, OpNum: 4}
-	v1o5 = proto.ViewStamp{ViewNum: 1, OpNum: 5}
-	v1o6 = proto.ViewStamp{ViewNum: 1, OpNum: 6}
-	v1o7 = proto.ViewStamp{ViewNum: 1, OpNum: 7}
-	v2o0 = proto.ViewStamp{ViewNum: 2, OpNum: 0}
-	v2o2 = proto.ViewStamp{ViewNum: 2, OpNum: 2}
-	v2o4 = proto.ViewStamp{ViewNum: 2, OpNum: 4}
-	v2o5 = proto.ViewStamp{ViewNum: 2, OpNum: 5}
-	v2o6 = proto.ViewStamp{ViewNum: 2, OpNum: 6}
-	v2o7 = proto.ViewStamp{ViewNum: 2, OpNum: 7}
-	v2o8 = proto.ViewStamp{ViewNum: 2, OpNum: 8}
-	v3o2 = proto.ViewStamp{ViewNum: 3, OpNum: 2}
-	v3o4 = proto.ViewStamp{ViewNum: 3, OpNum: 4}
-	v2o1 = proto.ViewStamp{ViewNum: 2, OpNum: 1}
-	v2o3 = proto.ViewStamp{ViewNum: 2, OpNum: 3}
-	v3o3 = proto.ViewStamp{ViewNum: 3, OpNum: 3}
-	v4o3 = proto.ViewStamp{ViewNum: 4, OpNum: 3}
-	v4o4 = proto.ViewStamp{ViewNum: 4, OpNum: 4}
-	v4o5 = proto.ViewStamp{ViewNum: 4, OpNum: 5}
-	v4o6 = proto.ViewStamp{ViewNum: 4, OpNum: 6}
-	v4o1 = proto.ViewStamp{ViewNum: 4, OpNum: 1}
-	v4o2 = proto.ViewStamp{ViewNum: 4, OpNum: 2}
-}
-
 func TestPrimaryChange(t *testing.T) {
 	cases := []struct {
 		*mock
@@ -1110,5 +1076,591 @@ func TestLazyReplicaRestore(t *testing.T) {
 	m.trigger(requestMessageEmptyEntries(replicaA, replicaA))
 	if backup.opLog.commitNum != prim.opLog.commitNum {
 		t.Errorf("backup.commit-number = %d, expected %d", backup.opLog.commitNum, prim.opLog.commitNum)
+	}
+}
+
+func TestBusCall(t *testing.T) {
+	for i, mtn := range proto.MessageType_name {
+		b := &bus{
+			requestC: make(chan proto.Message, 1),
+			receiveC: make(chan proto.Message, 1),
+		}
+		mt := proto.MessageType(i)
+		b.Call(context.TODO(), proto.Message{Type: mt})
+		if mt == proto.Request {
+			select {
+			case <-b.requestC:
+			default:
+				t.Errorf("%d: cannot receive %s on request chan", mt, mtn)
+			}
+		} else {
+			if mt == proto.Heartbeat || mt == proto.Change {
+				select {
+				case <-b.receiveC:
+					t.Errorf("%d: step should ignore %s", mt, mtn)
+				default:
+				}
+			} else {
+				select {
+				case <-b.receiveC:
+				default:
+					t.Errorf("%d: cannot receive %s on receive chan", mt, mtn)
+				}
+			}
+		}
+	}
+}
+
+func TestBusCallNonblocking(t *testing.T) {
+	b := &bus{
+		requestC: make(chan proto.Message),
+		doneC:    make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopFunc := func() {
+		close(b.doneC)
+	}
+	cases := []struct {
+		unblock func()
+		err     error
+	}{
+		{stopFunc, ErrStopped},
+		{cancel, context.Canceled},
+	}
+	for i, test := range cases {
+		errC := make(chan error, 1)
+		go func() {
+			err := b.Call(ctx, proto.Message{Type: proto.Request})
+			errC <- err
+		}()
+		test.unblock()
+		select {
+		case err := <-errC:
+			if err != test.err {
+				t.Errorf("#%d: err = %v, expected %v", i, err, test.err)
+			}
+			if ctx.Err() != nil {
+				ctx = context.TODO()
+			}
+			select {
+			case <-b.doneC:
+				b.doneC = make(chan struct{})
+			default:
+			}
+		case <-time.After(time.Millisecond * 100):
+			t.Errorf("#%d: failed to unblock call", i)
+		}
+	}
+}
+
+func TestBusRequest(t *testing.T) {
+	msgs := []proto.Message{}
+	appendCall := func(r *VR, m proto.Message) {
+		msgs = append(msgs, m)
+	}
+	b := newBus()
+	store := NewStore()
+	vr := newVR(&Config{
+		Num:               1,
+		Peers:             []uint64{1},
+		TransitionTimeout: 10,
+		HeartbeatTimeout:  1,
+		Store:             store,
+		AppliedNum:        0,
+	})
+	go b.cycle(vr)
+	b.Change(context.TODO())
+	for {
+		f := <-b.Tuple()
+		store.Append(f.PersistentEntries)
+		if f.SoftState.Prim == vr.replicaNum {
+			vr.call = appendCall
+			b.Advance()
+			break
+		}
+		b.Advance()
+	}
+	b.Call(context.TODO(), proto.Message{
+		Type:    proto.Request,
+		Entries: []proto.Entry{{Data: []byte("testdata")}}},
+	)
+	b.Stop()
+	if len(msgs) != 1 {
+		t.Fatalf("len(messages) = %d, expected %d", len(msgs), 1)
+	}
+	if msgs[0].Type != proto.Request {
+		t.Errorf("msg type = %d, expected %d", msgs[0].Type, proto.Request)
+	}
+	if !reflect.DeepEqual(msgs[0].Entries[0].Data, []byte("testdata")) {
+		t.Errorf("data = %v, expected %v", msgs[0].Entries[0].Data, []byte("testdata"))
+	}
+}
+
+func TestBusClock(t *testing.T) {
+	b := newBus()
+	bs := NewStore()
+	vr := newVR(&Config{
+		Num:               1,
+		Peers:             []uint64{1},
+		TransitionTimeout: 10,
+		HeartbeatTimeout:  1,
+		Store:             bs,
+		AppliedNum:        0,
+	})
+	go b.cycle(vr)
+	pulse := vr.pulse
+	b.Clock()
+	b.Stop()
+	if vr.pulse != pulse+1 {
+		t.Errorf("pulse = %d, expected %d", vr.pulse, pulse+1)
+	}
+}
+
+func TestBusStop(t *testing.T) {
+	b := newBus()
+	bs := NewStore()
+	vr := newVR(&Config{
+		Num:               1,
+		Peers:             []uint64{1},
+		TransitionTimeout: 10,
+		HeartbeatTimeout:  1,
+		Store:             bs,
+		AppliedNum:        0,
+	})
+	doneC := make(chan struct{})
+
+	go func() {
+		b.cycle(vr)
+		close(doneC)
+	}()
+
+	pulse := vr.pulse
+	b.Clock()
+	b.Stop()
+
+	select {
+	case <-doneC:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for node to stop!")
+	}
+	if vr.pulse != pulse+1 {
+		t.Errorf("pulse = %d, expected %d", vr.pulse, pulse+1)
+	}
+	b.Clock()
+	if vr.pulse != pulse+1 {
+		t.Errorf("pulse = %d, expected %d", vr.pulse, pulse+1)
+	}
+	b.Stop()
+}
+
+func TestReadyPreCheck(t *testing.T) {
+	cases := []struct {
+		f     Tuple
+		check bool
+	}{
+		{Tuple{}, false},
+		{Tuple{SoftState: &SoftState{Prim: 1}}, true},
+		{Tuple{PersistentEntries: make([]proto.Entry, 1, 1)}, true},
+		{Tuple{ApplicableEntries: make([]proto.Entry, 1, 1)}, true},
+		{Tuple{Messages: make([]proto.Message, 1, 1)}, true},
+	}
+	for i, test := range cases {
+		if rv := test.f.PreCheck(); rv != test.check {
+			t.Errorf("#%d: precheck = %v, expected %v", i, rv, test.check)
+		}
+	}
+}
+
+func TestBusRestart(t *testing.T) {
+	entries := []proto.Entry{
+		{ViewStamp: proto.ViewStamp{ViewNum: 1, OpNum: 1}},
+		{ViewStamp: proto.ViewStamp{ViewNum: 1, OpNum: 2}, Data: []byte("foo")},
+	}
+	hs := proto.HardState{ViewStamp: proto.ViewStamp{ViewNum: 1}, CommitNum: 1}
+	f := Tuple{
+		HardState:         hs,
+		ApplicableEntries: entries[:hs.CommitNum],
+	}
+	s := NewStore()
+	s.SetHardState(hs)
+	s.Append(entries)
+	n := Restart(&Config{
+		Num:               1,
+		Peers:             []uint64{1},
+		TransitionTimeout: 10,
+		HeartbeatTimeout:  1,
+		Store:             s,
+		AppliedNum:        0,
+	})
+	if g := <-n.Tuple(); !reflect.DeepEqual(g, f) {
+		t.Errorf("g = %+v,\n f %+v", g, f)
+	}
+	n.Advance()
+	select {
+	case f := <-n.Tuple():
+		t.Errorf("unexpecteded Tuple: %+v", f)
+	case <-time.After(time.Millisecond):
+	}
+}
+
+func TestBusAdvance(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := NewStore()
+	r := Start(&Config{
+		Num:               1,
+		Peers:             []uint64{1},
+		TransitionTimeout: 10,
+		HeartbeatTimeout:  1,
+		Store:             s,
+		AppliedNum:        0,
+	})
+	r.Change(ctx)
+	<-r.Tuple()
+	r.Call(ctx, proto.Message{Type: proto.Request, Entries: []proto.Entry{{Data: []byte("foo")}}})
+	var f Tuple
+	select {
+	case f = <-r.Tuple():
+		t.Fatalf("unexpecteded ready before advance: %+v", f)
+	case <-time.After(time.Millisecond):
+	}
+	s.Append(f.PersistentEntries)
+	r.Advance()
+	select {
+	case <-r.Tuple():
+	case <-time.After(time.Millisecond):
+		t.Errorf("expected ready after advance, but there is no ready available")
+	}
+}
+
+func TestSoftStateEqual(t *testing.T) {
+	cases := []struct {
+		ss       *SoftState
+		expEqual bool
+	}{
+		{&SoftState{}, true},
+		{&SoftState{Prim: 1}, false},
+		{&SoftState{Role: Primary}, false},
+	}
+	for i, test := range cases {
+		if rv := test.ss.equal(&SoftState{}); rv != test.expEqual {
+			t.Errorf("#%d, equal = %v, expected %v", i, rv, test.expEqual)
+		}
+	}
+}
+
+func TestIsHardStateEqual(t *testing.T) {
+	cases := []struct {
+		hs       proto.HardState
+		expEqual bool
+	}{
+		{nilHardState, true},
+		{proto.HardState{CommitNum: 1}, false},
+		{proto.HardState{ViewStamp: proto.ViewStamp{ViewNum: 1}}, false},
+	}
+	for i, test := range cases {
+		if IsHardStateEqual(test.hs, nilHardState) != test.expEqual {
+			t.Errorf("#%d, equal = %v, expected %v", i, IsHardStateEqual(test.hs, nilHardState), test.expEqual)
+		}
+	}
+}
+
+func testRoundRobin() error {
+	cases := []struct {
+		vs      proto.ViewStamp
+		peers   []uint64
+		expNum  uint64
+	}{
+		{proto.ViewStamp{ViewNum:replicaD},[]uint64{replicaA}, replicaA},
+		{proto.ViewStamp{ViewNum:replicaC},[]uint64{replicaA, replicaB, replicaC}, replicaA},
+		{proto.ViewStamp{ViewNum:replicaB},[]uint64{replicaA, replicaD}, replicaA},
+		{proto.ViewStamp{ViewNum:replicaC},[]uint64{replicaA, replicaC}, replicaA},
+	}
+	for i, test := range cases {
+		windows := len(test.peers)
+		if rv := roundRobin(test.vs, windows); rv != test.expNum {
+			return fmt.Errorf("#%d: round_robin = %v, expected %v", i, rv, test.expNum)
+		}
+	}
+	return nil
+}
+
+func TestRoundRobinSelector(t *testing.T) {
+	if err := testRoundRobin(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestJudgeInvalidSelector(t *testing.T) {
+	const (
+		SelectorUnknown = iota - 1
+		SelectorA
+		SelectorB
+	)
+	cases := []struct {
+		elector    int
+		expResult bool
+	}{
+		{SelectorUnknown,false},
+		{SelectorA,true},
+		{SelectorB,false},
+	}
+	for i, test := range cases {
+		if rv := isInvalidSelector(test.elector); rv != test.expResult {
+			t.Errorf("#%d: is_invalid_selector = %v, expected %v", i, rv, test.expResult)
+		}
+	}
+}
+
+// Proof: section 3
+// State machine replication requires that replicas start in
+// the same initial state, and that operations be deterministic.
+func TestSameInitialState(t *testing.T) {
+
+}
+
+// Proof: section 3
+// VR uses a primary bus to order client requests; the
+// other replicas are backups that simply accept the order
+// selected by the primary.
+func TestPrimaryDeterminesLogOrder(t *testing.T) {
+
+}
+
+// Proof: section 3
+// The backups monitor the primary, and if it appears to be
+// faulty, they carry out a view change protocol to select
+// a new primary.
+func TestSelectNewPrimary(t *testing.T) {
+
+}
+
+// Proof: section 4, figure 2
+// The replicas are numbered based on their IP addresses:
+// the bus with the smallest IP address is bus 1.
+// The primary is chosen round-robin, starting with bus 1,
+// as the system moves to new views. The status indicates what
+// sub-protocol the bus is engaged in.
+func TestRoundRobinChosen(t *testing.T) {
+	if err := testRoundRobin(); err != nil {
+		t.Error(err)
+	}
+}
+
+// Proof: section 4.1
+// Members only process normal protocol messages containing
+// a view-number that matches the view-number they know.
+// If the sender is behind, the receiver routers the message.
+func TestSenderBehindDropsMessage(t *testing.T) {
+	roles := []role{Replica, Primary, Backup}
+	for _, role := range roles {
+		testSenderBehindDropsMessage(t, role)
+	}
+}
+
+// Proof: section 4.1
+// If the sender is ahead, the bus performs a state
+// transfer: it requests information it is missing from the
+// other replicas and uses this information to bring itself
+// up to date before processing the message.
+func TestSenderAheadPerformsStateTransfer(t *testing.T) {
+	roles := []role{Replica, Primary, Backup}
+	for _, role := range roles {
+		testSenderAheadPerformsStateTransfer(t, role)
+	}
+}
+
+func testSenderBehindDropsMessage(t *testing.T, s role) {
+	r := newVR(&Config{
+		Num:               1,
+		Peers:             []uint64{1, 2, 3},
+		TransitionTimeout: 10,
+		HeartbeatTimeout:  1,
+		Store:             NewStore(),
+		AppliedNum:        0,
+	})
+	switch s {
+	case Replica:
+		r.becomeReplica()
+	case Backup:
+		vs := proto.ViewStamp{ViewNum:1}
+		r.becomeBackup(vs, 2)
+	case Primary:
+		r.becomeReplica()
+		r.becomePrimary()
+	}
+	r.Call(proto.Message{Type: proto.Prepare, ViewStamp: proto.ViewStamp{ViewNum: 2}})
+	if r.ViewStamp.ViewNum != 2 {
+		t.Errorf("view-number = %d, expected %d", r.ViewStamp.ViewNum, 2)
+	}
+	if r.role != Backup {
+		t.Errorf("s = %v, expected %v", r.role, Backup)
+	}
+}
+
+func testSenderAheadPerformsStateTransfer(t *testing.T, s role) {
+
+}
+
+// Proof: section 4.1
+// The primary advances op-number, adds the request to the end
+// of the opLog, Then it sends a <PREPARE v, m, n, k> message to
+// the other replicas, where v is the current view-number, m is
+// the message it received from the client, n is the op-number
+// it assigned to the request, and k is the commitNum-number.
+// The primary waits for f PREPARE_OK messages from different
+// backups; at this point it considers the operation (and all
+// earlier ones) to be committed. Then, after it has executed
+// all earlier operations (those assigned smaller op-numbers),
+// the primary executes the operation by making an up-call to
+// the service code, and increments its commitNum-number.
+func TestPrimarySyncPrepareToBackups(t *testing.T) {
+	testPrimarySendPrepare()
+	testPrimaryWaitsPrepareOk()
+}
+
+func testPrimarySendPrepare() {
+
+}
+
+func testPrimaryWaitsPrepareOk() {
+
+}
+
+// Backups process PREPARE messages in order: a backup won’t accept
+// a prepare with op-number n until it has entries for all earlier
+// requests in its opLog. When a backup i receives a PREPARE message,
+// it waits until it has entries in its opLog for all earlier requests
+// (doing state transfer if necessary to get the missing information).
+// Then it increments its op-number, adds the request to the end of
+// its opLog, updates the client’s information in the client-table, and
+// sends a <PREPARE_OK v, n, i> message to the primary to indicate
+// that this operation and all earlier ones have prepared locally
+func TestBackupsProcessPrepareFromPrimary(t *testing.T) {
+
+}
+
+// Normally the primary informs backups about the commitNum when it
+// sends the next PREPARE message; this is the purpose of the
+// commitNum-number in the PREPARE message. However, if the primary
+// does not receive a new client request in a timely way, it instead
+// informs the backups of the latest commitNum by sending them a <COMMIT
+// v, k> message, where k is commitNum-number (note that in this case
+// commitNum-number = op-number).
+func TestPrimaryHeartbeatToBackups(t *testing.T) {
+
+}
+
+// When a backup learns of a commitNum, it waits until it has the request
+// in its opLog (which may require state transfer) and until it has
+// executed all earlier operations. Then it executes the operation by
+// performing the up-call to the service code, increments its commitNum-number,
+// updates the client’s entry in the client-table, but does not send the
+// reply to the client.
+func TestBackupCommitLogApplyToStore(t *testing.T) {
+
+}
+
+// Proof: section 4.2
+// If a timeout expires without a communication from the primary, the
+// replicas carry out a view change to switch to a new primary.
+func TestBackupsTriggerTransitionToPrimary(t *testing.T) {
+	// phase 1
+	// phase 2
+	// phase 3
+	// phase 4
+	// phase 5
+}
+
+// Proof: section 4.2
+// up-calls occur only for committed operations. This means that the old
+// primary must have received at least f PREPARE_OK messages from other
+// replicas, and this in turn implies that the operation is recorded in
+// the logs of at least f + 1 replicas (the old primary and the f backups
+// that sent the PREPARE_OK messages).
+func TestLogCommittedByReplicas(t *testing.T) {
+
+}
+
+// Proof: section 4.2
+// Suppose an operation is still in the preparing stage and has not been
+// written to the majority opLog. At this time, a view change occurs. If
+// each bus in the new view has not received the op, the op will be
+// lost. There is no correctness problem.
+func TestLostPreparingLogInViewChange(t *testing.T) {
+
+}
+
+// Proof: section 4.2
+// Is it possible that two different operations have the same op-number?
+// Possibly, these two operations must belong to two different views, so they
+// have different view numbers. The larger view number is required. The VR
+// protocol can ensure that this situation will not occur under the same view
+// number.
+func TestOpNumberDuplicateProblem(t *testing.T) {
+
+}
+
+// Proof: section 4.3
+// When a bus recovers after a crash it cannot participate in request
+// processing and view changes until it has a state at least as recent as
+// when it failed. If it could participate sooner than this, the system can
+// fail.
+func TestFailedNodeRejoinsCluster(t *testing.T) {
+	// phase 1
+	// phase 2
+	// phase 3
+}
+
+// Proof: section 4.3
+// A failed node cannot participate in view change before recovery is complete.
+func TestRecoveryReplicaIgnoreViewChange(t *testing.T) {
+
+}
+
+// Proof: section 5.2
+// State transfer is used to track data from backward replicas in non-crash
+// scenarios. There are two cases.
+
+// In the current view, you are behind. In this case, you only need to fill
+// in the opLog after your op-number.
+func TestSyncBackwardLogs(t *testing.T) {
+	// phase 1
+	// phase 2
+	// phase 3
+}
+
+// A view change has occurred, and you are no longer in the new view. In this
+// case, you need to truncate your opLog to commitNum-number (because the following
+// op may be rewritten in the new view), and then find other replicas to pull
+// the opLog.
+func TestTruncateAndSyncLatestLog(t *testing.T) {
+
+}
+
+func applyToStore([]proto.Entry)      {}
+func sendMessages([]proto.Message)     {}
+func saveStateToDisk(proto.HardState)  {}
+func saveEntriesToDisk([]proto.Entry) {}
+
+func ExampleReplicator() {
+	replicator := Start(&Config{
+		Num:               1,
+		Peers:             nil,
+		TransitionTimeout: 0,
+		HeartbeatTimeout:  0,
+		Store:             nil,
+		AppliedNum:        0,
+	})
+	var prev proto.HardState
+	for {
+		tp := <-replicator.Tuple()
+		if !IsHardStateEqual(prev, tp.HardState) {
+			saveStateToDisk(tp.HardState)
+			prev = tp.HardState
+		}
+		saveEntriesToDisk(tp.PersistentEntries)
+		go applyToStore(tp.ApplicableEntries)
+		sendMessages(tp.Messages)
 	}
 }

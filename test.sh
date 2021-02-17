@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-source ./includes.sh
+function init() {
+    set -o errexit
+}
 
 function all_test() {
     GOMAXPROCS=1 go test -timeout 90s $(go list ./...)

@@ -2,8 +2,6 @@
 # Usage: coverage.sh [-h|-v|-c|-H|-C]
 #
 
-source ./includes.sh
-
 work_dir=.cover
 profile="$work_dir/cover.out"
 mode=count
@@ -21,6 +19,10 @@ function option() {
 function version() {
     echo "coverage 0.0.1"
     exit 0
+}
+
+function init() {
+    set -o errexit
 }
 
 function generate_cover() {
