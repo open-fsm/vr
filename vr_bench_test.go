@@ -3,14 +3,15 @@ package vr
 import (
 	"context"
 	"testing"
-	"github.com/open-rsm/vr/proto"
+	"github.com/open-fsm/log"
+	"github.com/open-fsm/spec/proto"
 )
 
 func Benchmark(tb *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	b := newBus()
-	s := NewStore()
+	s := log.NewStore()
 	vr := newVR(&Config{
 		Num:               1,
 		Peers:             []uint64{1},
