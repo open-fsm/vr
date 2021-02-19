@@ -15,7 +15,7 @@ logger "log"
 	"io"
 	"io/ioutil"
 	"github.com/open-fsm/log"
-	"github.com/open-fsm/group"
+	"github.com/open-fsm/vr/group"
 	"github.com/open-fsm/spec/proto"
 )
 
