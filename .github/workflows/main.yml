@@ -7,54 +7,32 @@ on:
     branches: [ main ]
 
 jobs:
+
   build:
+    name: Build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        imgtag:
-          - "golang:1.12-buster"
-        goarch:
-          - "amd64"
-
-    container: "${{matrix.imgtag}}"
-    env:
-      GOPATH: "${{github.workspace}}/go"
-      GOARCH: "${{matrix.goarch}}"
-      SRCDIR: "go/src/github.com/open-fsm/vr"
-      GO111MODULE: "on"
-
     steps:
-      - uses: actions/checkout@v2
-        with:
-          path: ${{env.SRCDIR}}
 
-      - name: test
-        run: |
-          cd $SRCDIR
-          ./test.sh
+    - name: Set up Go 1.x
+      uses: actions/setup-go@v2
+      with:
+        go-version: ^1.12
 
-  stats:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    container: "golang:1.12-buster"
-    env:
-      GOPATH: "${{github.workspace}}/go"
-      SRCDIR: "go/src/github.com/open-fsm/vr"
-      GO111MODULE: "on"
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
 
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          path: ${{env.SRCDIR}}
+    - name: Get dependencies
+      run: |
+        go get -v -t -d ./...
+        if [ -f Gopkg.toml ]; then
+            curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
+            dep ensure
+        fi
+    - name: Build
+      run: go build -v .
 
-      - name: install goveralls
-        run: go get github.com/mattn/goveralls
+    - name: Testing
+      run: GOMAXPROCS=1 go test -timeout 90s $(go list ./...)
 
-      - name: submit coverage
-        env:
-          COVERALLS_TOKEN: ${{secrets.GITHUB_TOKEN}}
-        run: |
-          cd $SRCDIR
-          ./coverage.sh -c
+    - name: Concurrent Testing
+      run: GOMAXPROCS=4 go test -timeout 90s -race $(go list ./...)
