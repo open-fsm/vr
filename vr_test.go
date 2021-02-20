@@ -1,10 +1,14 @@
 package vr
 
 import (
+	"fmt"
 	"math"
+	"time"
 	"bytes"
 	"reflect"
+	"context"
 	"testing"
+	"github.com/open-fsm/log"
 	"github.com/open-fsm/spec/proto"
 )
 
@@ -18,6 +22,10 @@ const (
 
 var routes = [][]uint64{
 	{replicaA, replicaC}, {replicaA, replicaD}, {replicaA, replicaE},
+}
+
+func initViewStampCase() {
+
 }
 
 func changeMessage(from, to uint64) proto.Message {
@@ -75,8 +83,8 @@ func TestSingleReplicaCommit(t *testing.T) {
 	m.trigger(requestMessage(replicaA, replicaA))
 	m.trigger(requestMessage(replicaA, replicaA))
 	vr := m.peers(1)
-	if vr.log.commitNum != 3 {
-		t.Errorf("commit-number = %d, expected %d", vr.log.commitNum, 3)
+	if vr.log.CommitNum != 3 {
+		t.Errorf("commit-number = %d, expected %d", vr.log.CommitNum, 3)
 	}
 }
 
@@ -107,8 +115,8 @@ func TestLogReplication(t *testing.T) {
 		}
 		for j, node := range test.mock.nodes {
 			peer := node.(*VR)
-			if peer.log.commitNum != test.expCommitNum {
-				t.Errorf("#%d.%d: commit-number = %d, expected %d", i, j, peer.log.commitNum, test.expCommitNum)
+			if peer.log.CommitNum != test.expCommitNum {
+				t.Errorf("#%d.%d: commit-number = %d, expected %d", i, j, peer.log.CommitNum, test.expCommitNum)
 			}
 			entries := []proto.Entry{}
 			for _, e := range safeEntries(peer, test.mock.stores[j]) {
@@ -158,14 +166,14 @@ func TestRequest(t *testing.T) {
 		data := []byte("testdata")
 		send(changeMessage(replicaA, replicaA))
 		send(requestMessage(replicaA, replicaA))
-		expectedLog := newOpLog(NewStore())
+		expectedLog := log.New(log.NewStore())
 		if test.success {
-			expectedLog = &opLog{
-				store: &Store{
-					entries: []proto.Entry{{}, {Data: nil, ViewStamp:v1o1}, {ViewStamp:v1o2, Data: data}},
+			expectedLog = &log.Log{
+				Store: &log.Store{
+					Entries: []proto.Entry{{}, {Data: nil, ViewStamp:v1o1}, {ViewStamp:v1o2, Data: data}},
 				},
-				unsafe:    unsafe{offset: 3},
-				commitNum: 2}
+				Unsafe:    log.Unsafe{Offset: 3},
+				CommitNum: 2}
 		}
 		base := stringOpLog(expectedLog)
 		for i, node := range test.nodes {
@@ -211,9 +219,9 @@ func TestCommit(t *testing.T) {
 		{[]uint64{2, 1, 2, 2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v1o2}},2,0},
 	}
 	for i, test := range cases {
-		store := NewStore()
+		store := log.NewStore()
 		store.Append(test.entries)
-		store.hardState = proto.HardState{ViewStamp:proto.ViewStamp{ViewNum: test.viewNum}}
+		store.HardState = proto.HardState{ViewStamp:proto.ViewStamp{ViewNum: test.viewNum}}
 		vr := newVR(&Config{
 			Num:               1,
 			Peers:             []uint64{1},
@@ -226,7 +234,7 @@ func TestCommit(t *testing.T) {
 			vr.group.Set(uint64(j)+1, test.offsets[j], test.offsets[j]+1)
 		}
 		vr.tryCommit()
-		if cn := vr.log.commitNum; cn != test.exp {
+		if cn := vr.log.CommitNum; cn != test.exp {
 			t.Errorf("#%d: commit-number = %d, expected %d", i, cn, test.exp)
 		}
 	}
@@ -250,7 +258,7 @@ func TestIsTransitionTimeout(t *testing.T) {
 			Peers:             []uint64{1},
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
 		vr.pulse = test.pulse
@@ -280,7 +288,7 @@ func TestCallIgnoreLateViewNumMessage(t *testing.T) {
 		Peers:             []uint64{1},
 		TransitionTimeout: 10,
 		HeartbeatTimeout:  1,
-		Store:             NewStore(),
+		Store:             log.NewStore(),
 		AppliedNum:        0,
 	})
 	vr.call = fakeCall
@@ -312,7 +320,7 @@ func TestHandleMessagePrepare(t *testing.T) {
 		{proto.Message{Type: proto.Prepare, ViewStamp:v2o2, LogNum: 2, CommitNum: 4},2,2, false},
 	}
 	for i, test := range cases {
-		store := NewStore()
+		store := log.NewStore()
 		store.Append([]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}})
 		vr := newVR(&Config{
 			Num:               1,
@@ -324,11 +332,11 @@ func TestHandleMessagePrepare(t *testing.T) {
 		})
 		vr.becomeBackup(proto.ViewStamp{ViewNum:2}, None)
 		vr.handleAppend(test.m)
-		if vr.log.lastOpNum() != test.expOpNum {
-			t.Errorf("#%d: last op-number = %d, expected %d", i, vr.log.lastOpNum(), test.expOpNum)
+		if vr.log.LastOpNum() != test.expOpNum {
+			t.Errorf("#%d: last op-number = %d, expected %d", i, vr.log.LastOpNum(), test.expOpNum)
 		}
-		if vr.log.commitNum != test.expCommitNum {
-			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.commitNum, test.expCommitNum)
+		if vr.log.CommitNum != test.expCommitNum {
+			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.CommitNum, test.expCommitNum)
 		}
 		m := vr.handleMessages()
 		if len(m) != 1 {
@@ -342,16 +350,16 @@ func TestHandleMessagePrepare(t *testing.T) {
 
 func TestHandleHeartbeat(t *testing.T) {
 	initViewStampCase()
-	commitNum := uint64(2)
+	CommitNum := uint64(2)
 	cases := []struct {
 		m            proto.Message
 		expCommitNum uint64
 	}{
-		{proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, CommitNum: commitNum + 1}, commitNum + 1},
-		{proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, CommitNum: commitNum - 1}, commitNum},
+		{proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, CommitNum: CommitNum + 1}, CommitNum + 1},
+		{proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, CommitNum: CommitNum - 1}, CommitNum},
 	}
 	for i, test := range cases {
-		store := NewStore()
+		store := log.NewStore()
 		store.Append([]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}})
 		vr := newVR(&Config{
 			Num:               replicaA,
@@ -362,10 +370,10 @@ func TestHandleHeartbeat(t *testing.T) {
 			AppliedNum:        0,
 		})
 		vr.becomeBackup(proto.ViewStamp{ViewNum:2}, replicaB)
-		vr.log.commitTo(commitNum)
+		vr.log.CommitTo(CommitNum)
 		vr.handleHeartbeat(test.m)
-		if vr.log.commitNum != test.expCommitNum {
-			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.commitNum, test.expCommitNum)
+		if vr.log.CommitNum != test.expCommitNum {
+			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.CommitNum, test.expCommitNum)
 		}
 		m := vr.handleMessages()
 		if len(m) != 1 {
@@ -379,7 +387,7 @@ func TestHandleHeartbeat(t *testing.T) {
 
 func TestHandleCommitOk(t *testing.T) {
 	initViewStampCase()
-	store := NewStore()
+	store := log.NewStore()
 	store.Append([]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}})
 	vr := newVR(&Config{
 		Num:               1,
@@ -391,7 +399,7 @@ func TestHandleCommitOk(t *testing.T) {
 	})
 	vr.becomeReplica()
 	vr.becomePrimary()
-	vr.log.commitTo(vr.log.lastOpNum())
+	vr.log.CommitTo(vr.log.LastOpNum())
 	vr.Call(proto.Message{From: 2, Type: proto.CommitOk})
 	msgs := vr.handleMessages()
 	if len(msgs) != 1 {
@@ -412,7 +420,7 @@ func TestHandleCommitOk(t *testing.T) {
 		t.Fatalf("len(messages) = %d, expected 2", len(msgs))
 	}
 	if msgs[0].Type != proto.Commit {
-		t.Errorf("type = %v, expected heartbeat commitNum", msgs[0].Type)
+		t.Errorf("type = %v, expected heartbeat CommitNum", msgs[0].Type)
 	}
 	if msgs[1].Type != proto.Prepare {
 		t.Errorf("type = %v, expected message prepare", msgs[1].Type)
@@ -430,7 +438,7 @@ func TestHandleCommitOk(t *testing.T) {
 		t.Fatalf("len(messages) = %d, expected 1: %+v", len(msgs), msgs)
 	}
 	if msgs[0].Type != proto.Commit {
-		t.Errorf("type = %v, expected heartbeat commitNum", msgs[0].Type)
+		t.Errorf("type = %v, expected heartbeat CommitNum", msgs[0].Type)
 	}
 }
 
@@ -440,7 +448,7 @@ func TestMessagePrepareOkDelayReset(t *testing.T) {
 		Peers:             []uint64{replicaA, replicaB, replicaC},
 		TransitionTimeout: 5,
 		HeartbeatTimeout:  1,
-		Store:             NewStore(),
+		Store:             log.NewStore(),
 		AppliedNum:        0,
 	})
 	vr.becomeReplica()
@@ -522,7 +530,7 @@ func TestStateTransition(t *testing.T) {
 				Peers:             []uint64{1},
 				TransitionTimeout: 10,
 				HeartbeatTimeout:  1,
-				Store:             NewStore(),
+				Store:             log.NewStore(),
 				AppliedNum:        0,
 			})
 			vr.role = test.from
@@ -563,7 +571,7 @@ func TestAllServerCallDown(t *testing.T) {
 			Peers:             []uint64{1, 2, 3},
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
 		switch test.role {
@@ -584,11 +592,11 @@ func TestAllServerCallDown(t *testing.T) {
 			if vr.ViewStamp.ViewNum != test.expViewNum {
 				t.Errorf("#%d.%d view-number = %v, expected %v", i, j, vr.ViewStamp.ViewNum, test.expViewNum)
 			}
-			if uint64(vr.log.lastOpNum()) != test.expOpNum {
-				t.Errorf("#%d.%d op-number = %v, expected %v", i, j, vr.log.lastOpNum(), test.expOpNum)
+			if uint64(vr.log.LastOpNum()) != test.expOpNum {
+				t.Errorf("#%d.%d op-number = %v, expected %v", i, j, vr.log.LastOpNum(), test.expOpNum)
 			}
-			if uint64(len(vr.log.totalEntries())) != test.expOpNum {
-				t.Errorf("#%d.%d len(entries) = %v, expected %v", i, j, len(vr.log.totalEntries()), test.expOpNum)
+			if uint64(len(vr.log.TotalEntries())) != test.expOpNum {
+				t.Errorf("#%d.%d len(entries) = %v, expected %v", i, j, len(vr.log.TotalEntries()), test.expOpNum)
 			}
 			expPrim := uint64(2)
 			if vr.prim != expPrim {
@@ -617,12 +625,12 @@ func TestPrimaryPrepareOk(t *testing.T) {
 			Peers:             []uint64{replicaA, replicaB, replicaC},
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &opLog{
-			store:  &Store{entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
-			unsafe: unsafe{offset: 3},
+		vr.log = &log.Log{
+			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
+			Unsafe: log.Unsafe{Offset: 3},
 		}
 		vr.becomeReplica()
 		vr.becomePrimary()
@@ -670,12 +678,12 @@ func TestPrimaryRecovery(t *testing.T) {
 			Peers:             []uint64{replicaA, replicaB, replicaC},
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &opLog{
-			store:  &Store{entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
-			unsafe: unsafe{offset: 3},
+		vr.log = &log.Log{
+			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
+			Unsafe: log.Unsafe{Offset: 3},
 		}
 		vr.becomeReplica()
 		vr.becomePrimary()
@@ -723,12 +731,12 @@ func TestPrimaryGetState(t *testing.T) {
 			Peers:             []uint64{replicaA, replicaB, replicaC},
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &opLog{
-			store:  &Store{entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
-			unsafe: unsafe{offset: 3},
+		vr.log = &log.Log{
+			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
+			Unsafe: log.Unsafe{Offset: 3},
 		}
 		vr.becomeReplica()
 		vr.becomePrimary()
@@ -764,7 +772,7 @@ func TestBroadcastHeartbeat(t *testing.T) {
 			// configure nodes node
 		},
 	}
-	store := NewStore()
+	store := log.NewStore()
 	store.SetAppliedState(as)
 	vr := newVR(&Config{
 		Num:               replicaA,
@@ -781,15 +789,15 @@ func TestBroadcastHeartbeat(t *testing.T) {
 		vr.appendEntry(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: uint64(i) + 1}})
 	}
 	vr.group.Set(replicaB, 5, 6)
-	vr.group.Set(replicaC, vr.log.lastOpNum(), vr.log.lastOpNum()+1)
+	vr.group.Set(replicaC, vr.log.LastOpNum(), vr.log.LastOpNum()+1)
 	vr.Call(proto.Message{Type: proto.Heartbeat})
 	msgs := vr.handleMessages()
 	if len(msgs) != 2 {
 		t.Fatalf("len(messages) = %v, expected 2", len(msgs))
 	}
 	expectedCommitMap := map[uint64]uint64{
-		2: min(vr.log.commitNum, vr.group.Replica(2).Ack),
-		3: min(vr.log.commitNum, vr.group.Replica(3).Ack),
+		2: min(vr.log.CommitNum, vr.group.Replica(2).Ack),
+		3: min(vr.log.CommitNum, vr.group.Replica(3).Ack),
 	}
 	for i, m := range msgs {
 		if m.Type != proto.Commit {
@@ -828,10 +836,10 @@ func TestReceiveMessageHeartbeat(t *testing.T) {
 			Peers:             []uint64{replicaA, replicaB, replicaC},
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &opLog{store: &Store{entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}}}
+		vr.log = &log.Log{Store: &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}}}
 		vr.ViewStamp.ViewNum = 1
 		vr.role = test.role
 		switch test.role {
@@ -872,10 +880,10 @@ func TestPrimaryIncreaseNext(t *testing.T) {
 			Peers:             []uint64{replicaA, replicaB},
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log.append(prevEntries...)
+		vr.log.Append(prevEntries...)
 		vr.becomeReplica()
 		vr.becomePrimary()
 		vr.group.Set(replicaB, test.offset, test.next)
@@ -902,7 +910,7 @@ func TestRaising(t *testing.T) {
 		r := newVR(&Config{
 			num,
 			test.peers,
-			NewStore(),
+			log.NewStore(),
 			5,
 			1,
 			0,
@@ -934,7 +942,7 @@ func TestVRReplicas(t *testing.T) {
 			Peers:             test.peers,
 			TransitionTimeout: 10,
 			HeartbeatTimeout:  1,
-			Store:             NewStore(),
+			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
 		if !reflect.DeepEqual(r.group.ReplicaNums(), test.expPeers) {
@@ -949,7 +957,7 @@ func TestWindowDec(t *testing.T) {
 		Peers:             []uint64{replicaA, replicaB},
 		TransitionTimeout: 5,
 		HeartbeatTimeout:  1,
-		Store:             NewStore(),
+		Store:             log.NewStore(),
 		AppliedNum:        0,
 	})
 	r.becomeReplica()
@@ -967,7 +975,7 @@ func TestWindowDelay(t *testing.T) {
 		Peers:             []uint64{replicaA, replicaB},
 		TransitionTimeout: 5,
 		HeartbeatTimeout:  1,
-		Store:             NewStore(),
+		Store:             log.NewStore(),
 		AppliedNum:        0,
 	})
 	r.becomeReplica()
@@ -990,21 +998,21 @@ func TestCannotCommitWithoutNewViewNumEntry(t *testing.T) {
 	m.trigger(requestMessage(replicaA, replicaA))
 	m.trigger(requestMessage(replicaA, replicaA))
 	peer := m.peers(replicaA)
-	if peer.log.commitNum != 1 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.commitNum, 1)
+	if peer.log.CommitNum != 1 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 1)
 	}
 	m.reset()
 	m.ignore(proto.Prepare)
 	m.trigger(changeMessage(replicaB, replicaB))
 	peer = m.peers(replicaB)
-	if peer.log.commitNum != 1 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.commitNum, 1)
+	if peer.log.CommitNum != 1 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 1)
 	}
 	m.reset()
 	m.trigger(heartbeatMessage(replicaB, replicaB))
 	m.trigger(requestMessage(replicaA, replicaA))
-	if peer.log.commitNum != 5 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.commitNum, 5)
+	if peer.log.CommitNum != 5 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 5)
 	}
 }
 
@@ -1017,13 +1025,13 @@ func TestCommitWithoutNewViewNumEntry(t *testing.T) {
 	m.trigger(requestMessage(replicaA, replicaA))
 	m.trigger(requestMessage(replicaA, replicaA))
 	peer := m.peers(replicaA)
-	if peer.log.commitNum != 1 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.commitNum, 1)
+	if peer.log.CommitNum != 1 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 1)
 	}
 	m.reset()
 	m.trigger(changeMessage(replicaB, replicaB))
-	if peer.log.commitNum != 4 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.commitNum, 4)
+	if peer.log.CommitNum != 4 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 4)
 	}
 }
 
@@ -1035,18 +1043,18 @@ func TestLateMessages(t *testing.T) {
 	m.trigger(changeMessage(replicaA, replicaA))
 	m.trigger(proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, Entries: []proto.Entry{{ViewStamp:v2o3}}})
 	m.trigger(proto.Message{From: replicaA, To: replicaA, Type: proto.Request, Entries: []proto.Entry{{Data: []byte("testdata")}}})
-	opLog := &opLog{
-		store: &Store{
-			entries: []proto.Entry{
+	log := &log.Log{
+		Store: &log.Store{
+			Entries: []proto.Entry{
 				{}, {Data: nil, ViewStamp:v1o1},
 				{Data: nil, ViewStamp:v2o2}, {Data: nil, ViewStamp:v3o3},
 				{Data: []byte("testdata"), ViewStamp:v3o4},
 			},
 		},
-		unsafe:    unsafe{offset: 5},
-		commitNum: 4,
+		Unsafe:    log.Unsafe{Offset: 5},
+		CommitNum: 4,
 	}
-	base := stringOpLog(opLog)
+	base := stringOpLog(log)
 	for i, p := range m.nodes {
 		if sm, ok := p.(*VR); ok {
 			l := stringOpLog(sm.log)
@@ -1074,8 +1082,8 @@ func TestLazyReplicaRestore(t *testing.T) {
 	m.trigger(requestMessageEmptyEntries(replicaA, replicaA))
 	backup := m.peers(replicaC) // temp fix 2, skip test
 	m.trigger(requestMessageEmptyEntries(replicaA, replicaA))
-	if backup.log.commitNum != prim.log.commitNum {
-		t.Errorf("backup.commit-number = %d, expected %d", backup.log.commitNum, prim.log.commitNum)
+	if backup.log.CommitNum != prim.log.CommitNum {
+		t.Errorf("backup.commit-number = %d, expected %d", backup.log.CommitNum, prim.log.CommitNum)
 	}
 }
 
@@ -1159,7 +1167,7 @@ func TestBusRequest(t *testing.T) {
 		msgs = append(msgs, m)
 	}
 	b := newBus()
-	store := NewStore()
+	store := log.NewStore()
 	vr := newVR(&Config{
 		Num:               1,
 		Peers:             []uint64{1},
@@ -1198,7 +1206,7 @@ func TestBusRequest(t *testing.T) {
 
 func TestBusClock(t *testing.T) {
 	b := newBus()
-	bs := NewStore()
+	bs := log.NewStore()
 	vr := newVR(&Config{
 		Num:               1,
 		Peers:             []uint64{1},
@@ -1218,7 +1226,7 @@ func TestBusClock(t *testing.T) {
 
 func TestBusStop(t *testing.T) {
 	b := newBus()
-	bs := NewStore()
+	bs := log.NewStore()
 	vr := newVR(&Config{
 		Num:               1,
 		Peers:             []uint64{1},
@@ -1281,7 +1289,7 @@ func TestBusRestart(t *testing.T) {
 		HardState:         hs,
 		ApplicableEntries: entries[:hs.CommitNum],
 	}
-	s := NewStore()
+	s := log.NewStore()
 	s.SetHardState(hs)
 	s.Append(entries)
 	n := Restart(&Config{
@@ -1306,7 +1314,7 @@ func TestBusRestart(t *testing.T) {
 func TestBusAdvance(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := NewStore()
+	s := log.NewStore()
 	r := Start(&Config{
 		Num:               1,
 		Peers:             []uint64{1},
@@ -1476,7 +1484,7 @@ func testSenderBehindDropsMessage(t *testing.T, s role) {
 		Peers:             []uint64{1, 2, 3},
 		TransitionTimeout: 10,
 		HeartbeatTimeout:  1,
-		Store:             NewStore(),
+		Store:             log.NewStore(),
 		AppliedNum:        0,
 	})
 	switch s {
@@ -1507,13 +1515,13 @@ func testSenderAheadPerformsStateTransfer(t *testing.T, s role) {
 // of the log, Then it sends a <PREPARE v, m, n, k> message to
 // the other replicas, where v is the current view-number, m is
 // the message it received from the client, n is the op-number
-// it assigned to the request, and k is the commitNum-number.
+// it assigned to the request, and k is the CommitNum-number.
 // The primary waits for f PREPARE_OK messages from different
 // backups; at this point it considers the operation (and all
 // earlier ones) to be committed. Then, after it has executed
 // all earlier operations (those assigned smaller op-numbers),
 // the primary executes the operation by making an up-call to
-// the service code, and increments its commitNum-number.
+// the service code, and increments its CommitNum-number.
 func TestPrimarySyncPrepareToBackups(t *testing.T) {
 	testPrimarySendPrepare()
 	testPrimaryWaitsPrepareOk()
@@ -1540,21 +1548,21 @@ func TestBackupsProcessPrepareFromPrimary(t *testing.T) {
 
 }
 
-// Normally the primary informs backups about the commitNum when it
+// Normally the primary informs backups about the CommitNum when it
 // sends the next PREPARE message; this is the purpose of the
-// commitNum-number in the PREPARE message. However, if the primary
+// CommitNum-number in the PREPARE message. However, if the primary
 // does not receive a new client request in a timely way, it instead
-// informs the backups of the latest commitNum by sending them a <COMMIT
-// v, k> message, where k is commitNum-number (note that in this case
-// commitNum-number = op-number).
+// informs the backups of the latest CommitNum by sending them a <COMMIT
+// v, k> message, where k is CommitNum-number (note that in this case
+// CommitNum-number = op-number).
 func TestPrimaryHeartbeatToBackups(t *testing.T) {
 
 }
 
-// When a backup learns of a commitNum, it waits until it has the request
+// When a backup learns of a CommitNum, it waits until it has the request
 // in its log (which may require state transfer) and until it has
 // executed all earlier operations. Then it executes the operation by
-// performing the up-call to the service code, increments its commitNum-number,
+// performing the up-call to the service code, increments its CommitNum-number,
 // updates the client’s entry in the client-table, but does not send the
 // reply to the client.
 func TestBackupCommitLogApplyToStore(t *testing.T) {
@@ -1631,7 +1639,7 @@ func TestSyncBackwardLogs(t *testing.T) {
 }
 
 // A view change has occurred, and you are no longer in the new view. In this
-// case, you need to truncate your log to commitNum-number (because the following
+// case, you need to truncate your log to CommitNum-number (because the following
 // op may be rewritten in the new view), and then find other replicas to pull
 // the log.
 func TestTruncateAndSyncLatestLog(t *testing.T) {
