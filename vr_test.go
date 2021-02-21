@@ -84,8 +84,8 @@ func TestSingleReplicaCommit(t *testing.T) {
 	m.trigger(requestMessage(replicaA, replicaA))
 	m.trigger(requestMessage(replicaA, replicaA))
 	vr := m.peers(1)
-	if vr.log.CommitNum != 3 {
-		t.Errorf("commit-number = %d, expected %d", vr.log.CommitNum, 3)
+	if vr.log.Committed() != 3 {
+		t.Errorf("commit-number = %d, expected %d", vr.log.Committed(), 3)
 	}
 }
 
@@ -116,8 +116,8 @@ func TestLogReplication(t *testing.T) {
 		}
 		for j, node := range test.mock.nodes {
 			peer := node.(*VR)
-			if peer.log.CommitNum != test.expCommitNum {
-				t.Errorf("#%d.%d: commit-number = %d, expected %d", i, j, peer.log.CommitNum, test.expCommitNum)
+			if peer.log.Committed() != test.expCommitNum {
+				t.Errorf("#%d.%d: commit-number = %d, expected %d", i, j, peer.log.Committed(), test.expCommitNum)
 			}
 			entries := []proto.Entry{}
 			for _, e := range safeEntries(peer, test.mock.stores[j]) {
@@ -169,12 +169,12 @@ func TestRequest(t *testing.T) {
 		send(requestMessage(replicaA, replicaA))
 		expectedLog := log.New(log.NewStore())
 		if test.success {
-			expectedLog = &log.Log{
-				Store: &log.Store{
+			expectedLog = log.New(
+				&log.Store{
 					Entries: []proto.Entry{{}, {Data: nil, ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2, Data: data}},
 				},
-				Unsafe:    log.Unsafe{Offset: 3},
-				CommitNum: 2}
+			)
+			expectedLog.Init(log.Unsafe{Offset: 3}, 2)
 		}
 		base := stringOpLog(expectedLog)
 		for i, node := range test.nodes {
@@ -235,7 +235,7 @@ func TestCommit(t *testing.T) {
 			vr.group.Set(uint64(j)+1, test.offsets[j], test.offsets[j]+1)
 		}
 		vr.tryCommit()
-		if cn := vr.log.CommitNum; cn != test.exp {
+		if cn := vr.log.Committed(); cn != test.exp {
 			t.Errorf("#%d: commit-number = %d, expected %d", i, cn, test.exp)
 		}
 	}
@@ -336,8 +336,8 @@ func TestHandleMessagePrepare(t *testing.T) {
 		if vr.log.LastOpNum() != test.expOpNum {
 			t.Errorf("#%d: last op-number = %d, expected %d", i, vr.log.LastOpNum(), test.expOpNum)
 		}
-		if vr.log.CommitNum != test.expCommitNum {
-			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.CommitNum, test.expCommitNum)
+		if vr.log.Committed() != test.expCommitNum {
+			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.Committed(), test.expCommitNum)
 		}
 		m := vr.handleMessages()
 		if len(m) != 1 {
@@ -373,8 +373,8 @@ func TestHandleHeartbeat(t *testing.T) {
 		vr.becomeBackup(proto.ViewStamp{ViewNum:2}, replicaB)
 		vr.log.CommitTo(CommitNum)
 		vr.handleHeartbeat(test.m)
-		if vr.log.CommitNum != test.expCommitNum {
-			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.CommitNum, test.expCommitNum)
+		if vr.log.Committed() != test.expCommitNum {
+			t.Errorf("#%d: commit-number = %d, expected %d", i, vr.log.Committed(), test.expCommitNum)
 		}
 		m := vr.handleMessages()
 		if len(m) != 1 {
@@ -629,10 +629,10 @@ func TestPrimaryPrepareOk(t *testing.T) {
 			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &log.Log{
-			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
-			Unsafe: log.Unsafe{Offset: 3},
-		}
+		vr.log = log.New(
+			&log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
+		)
+		vr.log.Init(log.Unsafe{Offset: 3}, 0)
 		vr.becomeReplica()
 		vr.becomePrimary()
 		vr.handleMessages()
@@ -682,10 +682,10 @@ func TestPrimaryRecovery(t *testing.T) {
 			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &log.Log{
-			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
-			Unsafe: log.Unsafe{Offset: 3},
-		}
+		vr.log = log.New(
+			&log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
+		)
+		vr.log.Init(log.Unsafe{Offset: 3}, 0)
 		vr.becomeReplica()
 		vr.becomePrimary()
 		vr.handleMessages()
@@ -735,10 +735,10 @@ func TestPrimaryGetState(t *testing.T) {
 			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &log.Log{
-			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
-			Unsafe: log.Unsafe{Offset: 3},
-		}
+		vr.log = log.New(
+			&log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
+		)
+		vr.log.Init(log.Unsafe{Offset: 3}, 0)
 		vr.becomeReplica()
 		vr.becomePrimary()
 		vr.handleMessages()
@@ -797,8 +797,8 @@ func TestBroadcastHeartbeat(t *testing.T) {
 		t.Fatalf("len(messages) = %v, expected 2", len(msgs))
 	}
 	expectedCommitMap := map[uint64]uint64{
-		2: min(vr.log.CommitNum, vr.group.Replica(2).Ack),
-		3: min(vr.log.CommitNum, vr.group.Replica(3).Ack),
+		2: min(vr.log.Committed(), vr.group.Replica(2).Ack),
+		3: min(vr.log.Committed(), vr.group.Replica(3).Ack),
 	}
 	for i, m := range msgs {
 		if m.Type != proto.Commit {
@@ -840,7 +840,8 @@ func TestReceiveMessageHeartbeat(t *testing.T) {
 			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &log.Log{Store: &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}}}
+		s := &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}}
+		vr.log = log.New(s)
 		vr.ViewStamp.ViewNum = 1
 		vr.role = test.role
 		switch test.role {
@@ -999,21 +1000,21 @@ func TestCannotCommitWithoutNewViewNumEntry(t *testing.T) {
 	m.trigger(requestMessage(replicaA, replicaA))
 	m.trigger(requestMessage(replicaA, replicaA))
 	peer := m.peers(replicaA)
-	if peer.log.CommitNum != 1 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 1)
+	if peer.log.Committed() != 1 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.Committed(), 1)
 	}
 	m.reset()
 	m.ignore(proto.Prepare)
 	m.trigger(changeMessage(replicaB, replicaB))
 	peer = m.peers(replicaB)
-	if peer.log.CommitNum != 1 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 1)
+	if peer.log.Committed() != 1 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.Committed(), 1)
 	}
 	m.reset()
 	m.trigger(heartbeatMessage(replicaB, replicaB))
 	m.trigger(requestMessage(replicaA, replicaA))
-	if peer.log.CommitNum != 5 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 5)
+	if peer.log.Committed() != 5 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.Committed(), 5)
 	}
 }
 
@@ -1026,13 +1027,13 @@ func TestCommitWithoutNewViewNumEntry(t *testing.T) {
 	m.trigger(requestMessage(replicaA, replicaA))
 	m.trigger(requestMessage(replicaA, replicaA))
 	peer := m.peers(replicaA)
-	if peer.log.CommitNum != 1 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 1)
+	if peer.log.Committed() != 1 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.Committed(), 1)
 	}
 	m.reset()
 	m.trigger(changeMessage(replicaB, replicaB))
-	if peer.log.CommitNum != 4 {
-		t.Errorf("commit-number = %d, expected %d", peer.log.CommitNum, 4)
+	if peer.log.Committed() != 4 {
+		t.Errorf("commit-number = %d, expected %d", peer.log.Committed(), 4)
 	}
 }
 
@@ -1044,18 +1045,17 @@ func TestLateMessages(t *testing.T) {
 	m.trigger(changeMessage(replicaA, replicaA))
 	m.trigger(proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, Entries: []proto.Entry{{ViewStamp:spec.V2o3}}})
 	m.trigger(proto.Message{From: replicaA, To: replicaA, Type: proto.Request, Entries: []proto.Entry{{Data: []byte("testdata")}}})
-	log := &log.Log{
-		Store: &log.Store{
+	this := log.New(
+		&log.Store{
 			Entries: []proto.Entry{
 				{}, {Data: nil, ViewStamp:spec.V1o1},
 				{Data: nil, ViewStamp:spec.V2o2}, {Data: nil, ViewStamp:spec.V3o3},
 				{Data: []byte("testdata"), ViewStamp:spec.V3o4},
 			},
 		},
-		Unsafe:    log.Unsafe{Offset: 5},
-		CommitNum: 4,
-	}
-	base := stringOpLog(log)
+	)
+	this.Init(log.Unsafe{Offset: 5}, 4)
+	base := stringOpLog(this)
 	for i, p := range m.nodes {
 		if sm, ok := p.(*VR); ok {
 			l := stringOpLog(sm.log)
@@ -1083,8 +1083,8 @@ func TestLazyReplicaRestore(t *testing.T) {
 	m.trigger(requestMessageEmptyEntries(replicaA, replicaA))
 	backup := m.peers(replicaC) // temp fix 2, skip test
 	m.trigger(requestMessageEmptyEntries(replicaA, replicaA))
-	if backup.log.CommitNum != prim.log.CommitNum {
-		t.Errorf("backup.commit-number = %d, expected %d", backup.log.CommitNum, prim.log.CommitNum)
+	if backup.log.Committed() != prim.log.Committed() {
+		t.Errorf("backup.commit-number = %d, expected %d", backup.log.Committed(), prim.log.Committed())
 	}
 }
 
@@ -1421,29 +1421,6 @@ func TestJudgeInvalidSelector(t *testing.T) {
 	}
 }
 
-// Proof: section 3
-// State machine replication requires that replicas start in
-// the same initial state, and that operations be deterministic.
-func TestSameInitialState(t *testing.T) {
-
-}
-
-// Proof: section 3
-// VR uses a primary bus to order client requests; the
-// other replicas are backups that simply accept the order
-// selected by the primary.
-func TestPrimaryDeterminesLogOrder(t *testing.T) {
-
-}
-
-// Proof: section 3
-// The backups monitor the primary, and if it appears to be
-// faulty, they carry out a view change protocol to select
-// a new primary.
-func TestSelectNewPrimary(t *testing.T) {
-
-}
-
 // Proof: section 4, figure 2
 // The replicas are numbered based on their IP addresses:
 // the bus with the smallest IP address is bus 1.
@@ -1464,18 +1441,6 @@ func TestSenderBehindDropsMessage(t *testing.T) {
 	roles := []role{Replica, Primary, Backup}
 	for _, role := range roles {
 		testSenderBehindDropsMessage(t, role)
-	}
-}
-
-// Proof: section 4.1
-// If the sender is ahead, the bus performs a state
-// transfer: it requests information it is missing from the
-// other replicas and uses this information to bring itself
-// up to date before processing the message.
-func TestSenderAheadPerformsStateTransfer(t *testing.T) {
-	roles := []role{Replica, Primary, Backup}
-	for _, role := range roles {
-		testSenderAheadPerformsStateTransfer(t, role)
 	}
 }
 
@@ -1505,146 +1470,6 @@ func testSenderBehindDropsMessage(t *testing.T, s role) {
 	if r.role != Backup {
 		t.Errorf("s = %v, expected %v", r.role, Backup)
 	}
-}
-
-func testSenderAheadPerformsStateTransfer(t *testing.T, s role) {
-
-}
-
-// Proof: section 4.1
-// The primary advances op-number, adds the request to the end
-// of the log, Then it sends a <PREPARE v, m, n, k> message to
-// the other replicas, where v is the current view-number, m is
-// the message it received from the client, n is the op-number
-// it assigned to the request, and k is the CommitNum-number.
-// The primary waits for f PREPARE_OK messages from different
-// backups; at this point it considers the operation (and all
-// earlier ones) to be committed. Then, after it has executed
-// all earlier operations (those assigned smaller op-numbers),
-// the primary executes the operation by making an up-call to
-// the service code, and increments its CommitNum-number.
-func TestPrimarySyncPrepareToBackups(t *testing.T) {
-	testPrimarySendPrepare()
-	testPrimaryWaitsPrepareOk()
-}
-
-func testPrimarySendPrepare() {
-
-}
-
-func testPrimaryWaitsPrepareOk() {
-
-}
-
-// Backups process PREPARE messages in order: a backup won’t accept
-// a prepare with op-number n until it has entries for all earlier
-// requests in its log. When a backup i receives a PREPARE message,
-// it waits until it has entries in its log for all earlier requests
-// (doing state transfer if necessary to get the missing information).
-// Then it increments its op-number, adds the request to the end of
-// its log, updates the client’s information in the client-table, and
-// sends a <PREPARE_OK v, n, i> message to the primary to indicate
-// that this operation and all earlier ones have prepared locally
-func TestBackupsProcessPrepareFromPrimary(t *testing.T) {
-
-}
-
-// Normally the primary informs backups about the CommitNum when it
-// sends the next PREPARE message; this is the purpose of the
-// CommitNum-number in the PREPARE message. However, if the primary
-// does not receive a new client request in a timely way, it instead
-// informs the backups of the latest CommitNum by sending them a <COMMIT
-// v, k> message, where k is CommitNum-number (note that in this case
-// CommitNum-number = op-number).
-func TestPrimaryHeartbeatToBackups(t *testing.T) {
-
-}
-
-// When a backup learns of a CommitNum, it waits until it has the request
-// in its log (which may require state transfer) and until it has
-// executed all earlier operations. Then it executes the operation by
-// performing the up-call to the service code, increments its CommitNum-number,
-// updates the client’s entry in the client-table, but does not send the
-// reply to the client.
-func TestBackupCommitLogApplyToStore(t *testing.T) {
-
-}
-
-// Proof: section 4.2
-// If a timeout expires without a communication from the primary, the
-// replicas carry out a view change to switch to a new primary.
-func TestBackupsTriggerTransitionToPrimary(t *testing.T) {
-	// phase 1
-	// phase 2
-	// phase 3
-	// phase 4
-	// phase 5
-}
-
-// Proof: section 4.2
-// up-calls occur only for committed operations. This means that the old
-// primary must have received at least f PREPARE_OK messages from other
-// replicas, and this in turn implies that the operation is recorded in
-// the logs of at least f + 1 replicas (the old primary and the f backups
-// that sent the PREPARE_OK messages).
-func TestLogCommittedByReplicas(t *testing.T) {
-
-}
-
-// Proof: section 4.2
-// Suppose an operation is still in the preparing stage and has not been
-// written to the majority log. At this time, a view change occurs. If
-// each bus in the new view has not received the op, the op will be
-// lost. There is no correctness problem.
-func TestLostPreparingLogInViewChange(t *testing.T) {
-
-}
-
-// Proof: section 4.2
-// Is it possible that two different operations have the same op-number?
-// Possibly, these two operations must belong to two different views, so they
-// have different view numbers. The larger view number is required. The VR
-// protocol can ensure that this situation will not occur under the same view
-// number.
-func TestOpNumberDuplicateProblem(t *testing.T) {
-
-}
-
-// Proof: section 4.3
-// When a bus recovers after a crash it cannot participate in request
-// processing and view changes until it has a state at least as recent as
-// when it failed. If it could participate sooner than this, the system can
-// fail.
-func TestFailedNodeRejoinsCluster(t *testing.T) {
-	// phase 1
-	// phase 2
-	// phase 3
-}
-
-// Proof: section 4.3
-// A failed node cannot participate in view change before recovery is complete.
-func TestRecoveryReplicaIgnoreViewChange(t *testing.T) {
-
-}
-
-// Proof: section 5.2
-// State transfer is used to track data from backward replicas in non-crash
-// scenarios. There are two cases.
-
-// In the current view, you are behind. In this case, you only need to fill
-// in the log after your op-number.
-func TestSyncBackwardLogs(t *testing.T) {
-	// phase 1
-	// phase 2
-	// phase 3
-}
-
-// A view change has occurred, and you are no longer in the new view. In this
-// case, you need to truncate your log to CommitNum-number (because the following
-// op may be rewritten in the new view), and then find other replicas to pull
-// the log.
-func TestTruncateAndSyncLatestLog(t *testing.T) {
-
 }
 
 func applyToStore([]proto.Entry)      {}

@@ -46,8 +46,8 @@ func Start(c *Config) Bus {
 	b := newBus()
 	vr := newVR(c)
 	vr.becomeBackup(proto.ViewStamp{ViewNum:One}, None)
-	vr.log.CommitNum = vr.log.LastOpNum()
-	vr.CommitNum = vr.log.CommitNum
+	vr.log.SetCommitted(vr.log.LastOpNum())
+	vr.CommitNum = vr.log.Committed()
 	for _, num := range c.Peers {
 		vr.createReplica(num)
 	}
@@ -431,7 +431,7 @@ type VR struct {
 	proto.HardState
 
 	replicaNum uint64             // bus number, from 1 start
-	log        *log.Log           // used to manage operation loggers
+	log        log.Log            // used to manage operation log
 	group      *group.Group       // control and manage the current synchronization replicas
 	status     status             // record the current replication group status
 	role       role               // mark the current bus role
@@ -479,7 +479,7 @@ func newVR(c *Config) *VR {
 		replicaList = append(replicaList, fmt.Sprintf("%x", n))
 	}
 	logger.Printf("vr: new vr %x [nodes: [%s], view-number: %d, commit-number: %d, applied-number: %d, last-op-number: %d, last-view-number: %d]",
-		vr.replicaNum, strings.Join(replicaList, ","), vr.ViewStamp.ViewNum, vr.log.CommitNum, vr.log.AppliedNum, vr.log.LastOpNum(), vr.log.LastViewNum())
+		vr.replicaNum, strings.Join(replicaList, ","), vr.ViewStamp.ViewNum, vr.log.Committed(), vr.log.Applied(), vr.log.LastOpNum(), vr.log.LastViewNum())
 	return vr
 }
 
@@ -555,7 +555,7 @@ func (v *VR) Call(m proto.Message) error {
 	if m.Type == proto.Change {
 		logger.Printf("vr: %x is starting a new view changes at view-number %d", v.replicaNum, v.ViewStamp.ViewNum)
 		change(v)
-		v.CommitNum = v.log.CommitNum
+		v.CommitNum = v.log.Committed()
 		return nil
 	}
 	switch {
@@ -574,7 +574,7 @@ func (v *VR) Call(m proto.Message) error {
 		return nil
 	}
 	v.call(v, m)
-	v.CommitNum = v.log.CommitNum
+	v.CommitNum = v.log.Committed()
 	return nil
 }
 
@@ -647,7 +647,7 @@ func (v *VR) sendAppend(to uint64, typ ...proto.MessageType) {
 	m.ViewStamp.OpNum = replica.Next - 1
 	m.LogNum = v.log.ViewNum(replica.Next-1)
 	m.Entries = v.log.Entries(replica.Next)
-	m.CommitNum = v.log.CommitNum
+	m.CommitNum = v.log.Committed()
 	if n := len(m.Entries); replica.Ack != 0 && n != 0 {
 		replica.NiceUpdate(m.Entries[n-1].ViewStamp.OpNum)
 	} else if replica.Ack == 0 {
@@ -656,7 +656,7 @@ func (v *VR) sendAppend(to uint64, typ ...proto.MessageType) {
 }
 
 func (v *VR) sendHeartbeat(to uint64) {
-	commit := min(v.group.Replica(to).Ack, v.log.CommitNum)
+	commit := min(v.group.Replica(to).Ack, v.log.Committed())
 	v.send(proto.Message{
 		To:        to,
 		Type:      proto.Commit,
@@ -978,7 +978,7 @@ func (v *VR) handleAppliedState(m proto.Message) {
 	}
 	logger.Printf("vr: %x [commit-number: %d] ignored applied state [op-number: %d, view-number: %d]",
 		v.replicaNum, v.CommitNum, opNum, viewNum)
-	v.send(proto.Message{To: m.From, Type: proto.PrepareOk, ViewStamp: proto.ViewStamp{OpNum: v.log.CommitNum}})
+	v.send(proto.Message{To: m.From, Type: proto.PrepareOk, ViewStamp: proto.ViewStamp{OpNum: v.log.Committed()}})
 }
 
 func (v *VR) handleHeartbeat(m proto.Message) {
@@ -991,11 +991,11 @@ func (v *VR) softState() *SoftState {
 }
 
 func (v *VR) loadHardState(hs proto.HardState) {
-	if hs.CommitNum < v.log.CommitNum || hs.CommitNum > v.log.LastOpNum() {
+	if hs.CommitNum < v.log.Committed() || hs.CommitNum > v.log.LastOpNum() {
 		logger.Panicf("vr: %x commit-number %d is out of range [%d, %d]",
-			v.replicaNum, hs.CommitNum, v.log.CommitNum, v.log.LastOpNum())
+			v.replicaNum, hs.CommitNum, v.log.Committed(), v.log.LastOpNum())
 	}
-	v.log.CommitNum = hs.CommitNum
+	v.log.SetCommitted(hs.CommitNum)
 	v.ViewStamp.ViewNum = hs.ViewStamp.ViewNum
 	v.CommitNum = hs.CommitNum
 }
@@ -1024,7 +1024,7 @@ func (v *VR) isTransitionTimeout() bool {
 }
 
 func (v *VR) recover(as proto.AppliedState) bool {
-	if as.Applied.ViewStamp.OpNum <= v.log.CommitNum {
+	if as.Applied.ViewStamp.OpNum <= v.log.Committed() {
 		return false
 	}
 	if v.log.CheckNum(as.Applied.ViewStamp.OpNum, as.Applied.ViewStamp.ViewNum) {
@@ -1057,7 +1057,7 @@ func getStatus(vr *VR) Status {
 	s := Status{Num: vr.replicaNum}
 	s.HardState = vr.HardState
 	s.SoftState = *vr.softState()
-	s.AppliedNum = vr.log.AppliedNum
+	s.AppliedNum = vr.log.Applied()
 	if s.Role == Primary {
 		/*
 		s.Windows = make(map[uint64]window)
@@ -1355,7 +1355,7 @@ func safeEntries(vr *VR, s *log.Store) (entries []proto.Entry) {
 	s.Append(vr.log.UnsafeEntries())
 	vr.log.SafeTo(vr.log.LastOpNum(), vr.log.LastViewNum())
 	entries = vr.log.SafeEntries()
-	vr.log.AppliedTo(vr.log.CommitNum)
+	vr.log.AppliedTo(vr.log.Committed())
 	return entries
 }
 
@@ -1392,9 +1392,9 @@ func mustTempFile(pattern, data string) string {
 	return f.Name()
 }
 
-func stringOpLog(l *log.Log) string {
-	s := fmt.Sprintf("commit-number: %d\n", l.CommitNum)
-	s += fmt.Sprintf("applied-number:  %d\n", l.AppliedNum)
+func stringOpLog(l log.Log) string {
+	s := fmt.Sprintf("commit-number: %d\n", l.Committed())
+	s += fmt.Sprintf("applied-number:  %d\n", l.Applied())
 	for i, e := range l.TotalEntries() {
 		s += fmt.Sprintf("#%d: %+v\n", i, e)
 	}
