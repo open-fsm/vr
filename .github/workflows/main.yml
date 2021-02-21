@@ -28,8 +28,6 @@ jobs:
             curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
             dep ensure
         fi
-    - name: Build
-      run: go build -v .
 
     - name: Testing
       run: GOMAXPROCS=1 go test -timeout 90s $(go list ./...)
