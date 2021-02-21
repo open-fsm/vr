@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 	"github.com/open-fsm/log"
+	"github.com/open-fsm/spec"
 	"github.com/open-fsm/spec/proto"
 )
 
@@ -25,7 +26,7 @@ var routes = [][]uint64{
 }
 
 func initViewStampCase() {
-
+	spec.InitViewStampCase()
 }
 
 func changeMessage(from, to uint64) proto.Message {
@@ -170,7 +171,7 @@ func TestRequest(t *testing.T) {
 		if test.success {
 			expectedLog = &log.Log{
 				Store: &log.Store{
-					Entries: []proto.Entry{{}, {Data: nil, ViewStamp:v1o1}, {ViewStamp:v1o2, Data: data}},
+					Entries: []proto.Entry{{}, {Data: nil, ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2, Data: data}},
 				},
 				Unsafe:    log.Unsafe{Offset: 3},
 				CommitNum: 2}
@@ -201,22 +202,22 @@ func TestCommit(t *testing.T) {
 		viewNum uint64
 		exp     uint64
 	}{
-		{[]uint64{1},[]proto.Entry{{ViewStamp:v1o1}},1,1},
-		{[]uint64{1},[]proto.Entry{{ViewStamp:v1o1}},2,0},
-		{[]uint64{2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}},2,2},
-		{[]uint64{1},[]proto.Entry{{ViewStamp:v2o1}},2,1},
+		{[]uint64{1},[]proto.Entry{{ViewStamp:spec.V1o1}},1,1},
+		{[]uint64{1},[]proto.Entry{{ViewStamp:spec.V1o1}},2,0},
+		{[]uint64{2},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}},2,2},
+		{[]uint64{1},[]proto.Entry{{ViewStamp:spec.V2o1}},2,1},
 
-		{[]uint64{2, 1, 1},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}},1,1},
-		{[]uint64{2, 1, 1},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v1o2}},2,0},
-		{[]uint64{2, 1, 2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}},2,2},
-		{[]uint64{2, 1, 2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v1o2}},2,0},
+		{[]uint64{2, 1, 1},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}},1,1},
+		{[]uint64{2, 1, 1},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2}},2,0},
+		{[]uint64{2, 1, 2},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}},2,2},
+		{[]uint64{2, 1, 2},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2}},2,0},
 
-		{[]uint64{2, 1, 1, 1},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}},1,1},
-		{[]uint64{2, 1, 1, 1},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v1o2}},2,0},
-		{[]uint64{2, 1, 1, 2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}},1,1},
-		{[]uint64{2, 1, 1, 2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v1o2}},2,0},
-		{[]uint64{2, 1, 2, 2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}},2,2},
-		{[]uint64{2, 1, 2, 2},[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v1o2}},2,0},
+		{[]uint64{2, 1, 1, 1},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}},1,1},
+		{[]uint64{2, 1, 1, 1},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2}},2,0},
+		{[]uint64{2, 1, 1, 2},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}},1,1},
+		{[]uint64{2, 1, 1, 2},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2}},2,0},
+		{[]uint64{2, 1, 2, 2},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}},2,2},
+		{[]uint64{2, 1, 2, 2},[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2}},2,0},
 	}
 	for i, test := range cases {
 		store := log.NewStore()
@@ -307,21 +308,21 @@ func TestHandleMessagePrepare(t *testing.T) {
 		expCommitNum uint64
 		expIgnore    bool
 	}{
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o2, LogNum: 3, CommitNum: 3},2,0,true},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o3, LogNum: 3, CommitNum: 3},2,0,true},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o1, LogNum: 1, CommitNum: 1},2,1,false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o0, LogNum: 0, CommitNum: 1, Entries: []proto.Entry{{ViewStamp:v2o1}}},1, 1,false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o2, LogNum: 2, CommitNum: 3, Entries: []proto.Entry{{ViewStamp:v2o3}, {ViewStamp:v2o4}}},4, 3, false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o2, LogNum: 2, CommitNum: 4, Entries: []proto.Entry{{ViewStamp:v2o3}}},3, 3,false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o1, LogNum: 1, CommitNum: 4, Entries: []proto.Entry{{ViewStamp:v2o2}}},2, 2,false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v1o1, LogNum: 1, CommitNum: 3},2,1, false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v1o1, LogNum: 1, CommitNum: 3, Entries: []proto.Entry{{ViewStamp:v2o2}}},2,2,false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o2, LogNum: 2, CommitNum: 3},2,2, false},
-		{proto.Message{Type: proto.Prepare, ViewStamp:v2o2, LogNum: 2, CommitNum: 4},2,2, false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o2, LogNum: 3, CommitNum: 3},2,0,true},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o3, LogNum: 3, CommitNum: 3},2,0,true},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o1, LogNum: 1, CommitNum: 1},2,1,false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o0, LogNum: 0, CommitNum: 1, Entries: []proto.Entry{{ViewStamp:spec.V2o1}}},1, 1,false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o2, LogNum: 2, CommitNum: 3, Entries: []proto.Entry{{ViewStamp:spec.V2o3}, {ViewStamp:spec.V2o4}}},4, 3, false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o2, LogNum: 2, CommitNum: 4, Entries: []proto.Entry{{ViewStamp:spec.V2o3}}},3, 3,false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o1, LogNum: 1, CommitNum: 4, Entries: []proto.Entry{{ViewStamp:spec.V2o2}}},2, 2,false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V1o1, LogNum: 1, CommitNum: 3},2,1, false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V1o1, LogNum: 1, CommitNum: 3, Entries: []proto.Entry{{ViewStamp:spec.V2o2}}},2,2,false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o2, LogNum: 2, CommitNum: 3},2,2, false},
+		{proto.Message{Type: proto.Prepare, ViewStamp:spec.V2o2, LogNum: 2, CommitNum: 4},2,2, false},
 	}
 	for i, test := range cases {
 		store := log.NewStore()
-		store.Append([]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}})
+		store.Append([]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}})
 		vr := newVR(&Config{
 			Num:               1,
 			Peers:             []uint64{1},
@@ -360,7 +361,7 @@ func TestHandleHeartbeat(t *testing.T) {
 	}
 	for i, test := range cases {
 		store := log.NewStore()
-		store.Append([]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}})
+		store.Append([]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}})
 		vr := newVR(&Config{
 			Num:               replicaA,
 			Peers:             []uint64{1},
@@ -388,7 +389,7 @@ func TestHandleHeartbeat(t *testing.T) {
 func TestHandleCommitOk(t *testing.T) {
 	initViewStampCase()
 	store := log.NewStore()
-	store.Append([]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}})
+	store.Append([]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}})
 	vr := newVR(&Config{
 		Num:               1,
 		Peers:             []uint64{1, 2},
@@ -629,7 +630,7 @@ func TestPrimaryPrepareOk(t *testing.T) {
 			AppliedNum:        0,
 		})
 		vr.log = &log.Log{
-			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
+			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
 			Unsafe: log.Unsafe{Offset: 3},
 		}
 		vr.becomeReplica()
@@ -682,7 +683,7 @@ func TestPrimaryRecovery(t *testing.T) {
 			AppliedNum:        0,
 		})
 		vr.log = &log.Log{
-			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
+			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
 			Unsafe: log.Unsafe{Offset: 3},
 		}
 		vr.becomeReplica()
@@ -735,7 +736,7 @@ func TestPrimaryGetState(t *testing.T) {
 			AppliedNum:        0,
 		})
 		vr.log = &log.Log{
-			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}},
+			Store:  &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}},
 			Unsafe: log.Unsafe{Offset: 3},
 		}
 		vr.becomeReplica()
@@ -839,7 +840,7 @@ func TestReceiveMessageHeartbeat(t *testing.T) {
 			Store:             log.NewStore(),
 			AppliedNum:        0,
 		})
-		vr.log = &log.Log{Store: &log.Store{Entries: []proto.Entry{{}, {ViewStamp:v0o1}, {ViewStamp:v1o2}}}}
+		vr.log = &log.Log{Store: &log.Store{Entries: []proto.Entry{{}, {ViewStamp:spec.V0o1}, {ViewStamp:spec.V1o2}}}}
 		vr.ViewStamp.ViewNum = 1
 		vr.role = test.role
 		switch test.role {
@@ -865,7 +866,7 @@ func TestReceiveMessageHeartbeat(t *testing.T) {
 
 func TestPrimaryIncreaseNext(t *testing.T) {
 	initViewStampCase()
-	prevEntries := []proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v1o2}, {ViewStamp:v1o3}}
+	prevEntries := []proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V1o2}, {ViewStamp:spec.V1o3}}
 	cases := []struct {
 		offset  uint64
 		next    uint64
@@ -1041,14 +1042,14 @@ func TestLateMessages(t *testing.T) {
 	m.trigger(changeMessage(replicaA, replicaA))
 	m.trigger(changeMessage(replicaB, replicaB))
 	m.trigger(changeMessage(replicaA, replicaA))
-	m.trigger(proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, Entries: []proto.Entry{{ViewStamp:v2o3}}})
+	m.trigger(proto.Message{From: replicaB, To: replicaA, Type: proto.Prepare, ViewStamp:proto.ViewStamp{ViewNum: 2}, Entries: []proto.Entry{{ViewStamp:spec.V2o3}}})
 	m.trigger(proto.Message{From: replicaA, To: replicaA, Type: proto.Request, Entries: []proto.Entry{{Data: []byte("testdata")}}})
 	log := &log.Log{
 		Store: &log.Store{
 			Entries: []proto.Entry{
-				{}, {Data: nil, ViewStamp:v1o1},
-				{Data: nil, ViewStamp:v2o2}, {Data: nil, ViewStamp:v3o3},
-				{Data: []byte("testdata"), ViewStamp:v3o4},
+				{}, {Data: nil, ViewStamp:spec.V1o1},
+				{Data: nil, ViewStamp:spec.V2o2}, {Data: nil, ViewStamp:spec.V3o3},
+				{Data: []byte("testdata"), ViewStamp:spec.V3o4},
 			},
 		},
 		Unsafe:    log.Unsafe{Offset: 5},

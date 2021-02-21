@@ -1,7 +1,6 @@
 # Viewstamped Replication Library
 
 [![Build Status](https://github.com/open-rsm/vr/workflows/CI/badge.svg)](https://github.com/open-rsm/vr/actions)
-[![github](https://img.shields.io/badge/status-experiment-brightgreen.svg)](https://github.com/open-rsm/vr)
 [![license](https://img.shields.io/badge/license-Apache2-orange.svg?style=flat)](https://github.com/open-rsm/vr/blob/main/LICENSE)
 
 [Viewstamped Replication Revisited]: https://dspace.mit.edu/bitstream/handle/1721.1/71763/MIT-CSAIL-TR-2012-021.pdf?sequence=1
